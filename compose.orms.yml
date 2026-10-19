@@ -1,0 +1,23 @@
+# ORMs and query builders on PostgreSQL 17, plain pg first as the reference.
+#   docker compose -f compose.orms.yml run --rm bench
+# Override with SIDES, ROUNDS, DURATION (seconds per side), CONC, e.g.
+#   SIDES=kysely@pg,drizzle@pg ROUNDS=1 DURATION=10 docker compose -f compose.orms.yml run --rm bench
+# Results: the table on stdout, raw JSON lines in ./results/.
+include:
+  - docker-compose.yml
+
+services:
+  bench:
+    build: .
+    image: sequelize-orm-bench:runner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+    volumes:
+      - ./results:/app/results
+    command: >
+      sh -c "node seed.mjs --if-needed &&
+      node run.mjs '${SIDES:-pg@pg,postgresjs@pg,pgpromise@pg,databases@pg,kysely@pg,slonik@pg,knex@pg,drizzle@pg,orchid@pg,zapatos@pg,typeorm@pg,prisma@pg,objection@pg,sequelize6@pg,sequelize7@pg,mikroorm@pg}' ${ROUNDS:-3} ${DURATION:-20} ${CONC:-12}"

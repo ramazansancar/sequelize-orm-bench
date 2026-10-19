@@ -1,0 +1,1 @@
+Put local Sequelize v7 builds here, one folder per build: `builds/<name>/core.tgz`, `postgres.tgz`, `utils.tgz` and optionally `COMMIT` (the commit the build was made from). `node builds.mjs` installs them, then `sequelize7:<name>@pg` runs one. See "Testing a local Sequelize build" in the main README.

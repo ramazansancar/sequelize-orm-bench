@@ -2,16 +2,42 @@
   "name": "sequelize-orm-bench",
   "private": true,
   "type": "module",
-  "description": "Small read-path benchmark for Sequelize v6 / v7 vs plain pg (four queries, synthetic data).",
+  "description": "Small read-path benchmark: Sequelize v6 / v7 vs other Node.js ORMs, query builders and drivers (four queries, synthetic data).",
   "scripts": {
-    "db:up": "docker compose up -d",
+    "db:up": "docker compose up -d postgres",
     "seed": "node seed.mjs",
-    "bench": "node run.mjs"
+    "bench": "node run.mjs",
+    "builds": "node builds.mjs",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "pg": "8.23.1",
-    "sequelize6": "npm:sequelize@6.37.8",
+    "sequelize": "6.37.8",
     "@sequelize/core": "7.0.0-alpha.48",
-    "@sequelize/postgres": "7.0.0-alpha.48"
+    "@sequelize/postgres": "7.0.0-alpha.48",
+    "sequelize-cockroachdb": "6.0.6",
+    "typeorm": "1.1.2",
+    "reflect-metadata": "0.2.2",
+    "knex": "3.3.0",
+    "objection": "4.2.0",
+    "drizzle-orm": "0.45.4",
+    "kysely": "0.29.7",
+    "prisma": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@prisma/adapter-pg": "7.10.1",
+    "tsx": "4.23.15",
+    "orchid-orm": "1.78.27",
+    "zapatos": "6.6.1",
+    "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/postgresql": "7.2.5",
+    "pg-promise": "12.7.1",
+    "slonik": "49.11.0",
+    "postgres": "3.4.9",
+    "@databases/pg": "6.1.0",
+    "@clickhouse/client": "1.24.1",
+    "@founderpath/kysely-clickhouse": "1.7.0"
+  },
+  "optionalDependencies": {
+    "pg-native": "3.9.1"
   }
 }

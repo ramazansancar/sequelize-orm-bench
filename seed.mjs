@@ -1,76 +1,64 @@
-// Creates the 7 tables and fills them with deterministic synthetic data (seeded RNG),
-// roughly the shape of the app the numbers in the issue came from:
-// ~21k users, ~24k user-role rows, 500 items with translations, ~500k messages, ~12k links.
-//   PGHOST=localhost PGPORT=5440 PGUSER=bench PGPASSWORD=bench PGDATABASE=bench node seed.mjs
-import { createHash } from 'node:crypto';
+// Creates the 7 tables on one database and fills them with the same deterministic data
+// (lib/data.mjs), plus the indexes the queries use.
+//   node seed.mjs [--target pg|crdb|yb|ch] [--if-needed]      (default pg)
+// --if-needed skips the target when it already holds the full data set (used by the compose files).
 import pg from 'pg';
+import { DB } from './lib/config.mjs';
+import { TABLES, INDEXES, generate } from './lib/data.mjs';
 
-const N = { users: 21000, roles: 10, items: 500, messages: 500000, links: 12000 };
-// mulberry32: small seeded PRNG, so every run produces the same data
-let s = 42;
-const rnd = () => { s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-// unique and deterministic: uuid-shaped hash of a counter
-let idNo = 0;
-const uuid = () => { const h = createHash('sha1').update(String(idNo++)).digest('hex'); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${'89ab'[parseInt(h[16], 16) % 4]}${h.slice(17, 20)}-${h.slice(20, 32)}`; };
-const pick = (a) => a[Math.floor(rnd() * a.length)];
-const day = 86400000;
-const t0 = Date.parse('2025-01-01T00:00:00Z');
-const ts = () => new Date(t0 + Math.floor(rnd() * 600 * day));
+const target = process.argv.includes('--target') ? process.argv[process.argv.indexOf('--target') + 1] : 'pg';
+const q = (s) => `"${s}"`;
+const t0 = Date.now();
+if (process.argv.includes('--if-needed')) {
+  const sql = 'SELECT count(*) AS n FROM "Messages"';
+  let n = 0;
+  try {
+    // close the connection on the "no tables yet" path too, or the process never exits
+    if (target === 'ch') { const { createClient } = await import('@clickhouse/client'); const ch = createClient(DB.ch); try { n = Number((await (await ch.query({ query: sql, format: 'JSONEachRow' })).json())[0].n); } finally { await ch.close(); } }
+    else { const c = new pg.Client(DB[target]); await c.connect(); try { n = Number((await c.query(sql)).rows[0].n); } finally { await c.end(); } }
+  } catch { /* no tables yet */ }
+  if (n === 500000) { console.log(`${target}: already seeded`); process.exit(0); }
+}
+const data = generate();
 
-const c = new pg.Client({
-  host: process.env.PGHOST || 'localhost', port: Number(process.env.PGPORT || 5440),
-  user: process.env.PGUSER || 'bench', password: process.env.PGPASSWORD || 'bench', database: process.env.PGDATABASE || 'bench',
-});
-await c.connect();
-await c.query(`
-  DROP TABLE IF EXISTS "Links", "Messages", "ItemTranslations", "Items", "UserRoles", "Roles", "Users";
-  CREATE TABLE "Users" (id uuid PRIMARY KEY, email text, username varchar(255), "firstName" varchar(255), "lastName" varchar(255), "organizationId" uuid, "preferredLanguage" varchar(16));
-  CREATE TABLE "Roles" (id uuid PRIMARY KEY, key varchar(255), name varchar(255), priority int);
-  CREATE TABLE "UserRoles" (id uuid PRIMARY KEY, "userId" uuid, "roleId" uuid, "isActive" boolean, "expiresAt" timestamptz);
-  CREATE TABLE "Items" (id uuid PRIMARY KEY, type varchar(64), "isPublic" boolean, "isActive" boolean, "displayOrder" int, "createdAt" timestamptz);
-  CREATE TABLE "ItemTranslations" (id uuid PRIMARY KEY, "itemId" uuid, language varchar(16), name varchar(255));
-  CREATE TABLE "Messages" (id uuid PRIMARY KEY, "userId" uuid, type varchar(64), title varchar(255), "isRead" boolean, "createdAt" timestamptz);
-  CREATE TABLE "Links" (id uuid PRIMARY KEY, "userId" uuid, "otherId" uuid, status varchar(32));
-`);
-async function insert(table, cols, rows) {
-  for (let i = 0; i < rows.length; i += 1000) {
-    const chunk = rows.slice(i, i + 1000); const params = [];
-    const tuples = chunk.map((r) => `(${r.map((v) => { params.push(v); return `$${params.length}`; }).join(', ')})`);
-    await c.query(`INSERT INTO "${table}" (${cols.map((x) => `"${x}"`).join(', ')}) VALUES ${tuples.join(', ')}`, params);
+if (target === 'ch') {
+  const { createClient } = await import('@clickhouse/client');
+  const ch = createClient(DB.ch);
+  const notNull = new Set(['id', 'userId', 'roleId', 'itemId', 'otherId', 'isActive', 'isPublic', 'isRead', 'language', 'status', 'createdAt']);
+  const chType = (t, c) => {
+    const base = t === 'uuid' ? 'UUID' : t === 'boolean' ? 'Bool' : t === 'int' ? 'Int32' : t === 'timestamptz' ? "DateTime64(3, 'UTC')" : 'String';
+    return notNull.has(c) ? base : `Nullable(${base})`;
+  };
+  // MergeTree sorting keys picked for the four queries
+  const ORDER = { Users: ['id'], Roles: ['id'], UserRoles: ['userId', 'roleId'], Items: ['id'], ItemTranslations: ['itemId', 'language'], Messages: ['userId', 'createdAt'], Links: ['userId', 'otherId'] };
+  for (const [table, cols] of TABLES) {
+    await ch.command({ query: `DROP TABLE IF EXISTS ${q(table)}` });
+    await ch.command({ query: `CREATE TABLE ${q(table)} (${cols.map(([c, t]) => `${q(c)} ${chType(t, c)}`).join(', ')}) ENGINE = MergeTree ORDER BY (${ORDER[table].map(q).join(', ')})` });
+    const values = data[table].map((r) => Object.fromEntries(cols.map(([c], i) => [c, r[i] instanceof Date ? r[i].toISOString().replace('T', ' ').replace('Z', '') : r[i]])));
+    for (let i = 0; i < values.length; i += 50000) await ch.insert({ table, values: values.slice(i, i + 50000), format: 'JSONEachRow' });
+    console.log(`${table}: ${values.length}`);
   }
-  console.log(`${table}: ${rows.length}`);
+  await ch.command({ query: 'OPTIMIZE TABLE "Messages" FINAL' });
+  await ch.close();
+} else {
+  const c = new pg.Client(DB[target]);
+  await c.connect();
+  for (const [table] of [...TABLES].reverse()) await c.query(`DROP TABLE IF EXISTS ${q(table)}`);
+  for (const [table, cols] of TABLES) {
+    await c.query(`CREATE TABLE ${q(table)} (${cols.map(([n, t]) => `${q(n)} ${t}${n === 'id' ? ' PRIMARY KEY' : ''}`).join(', ')})`);
+    const rows = data[table];
+    for (let i = 0; i < rows.length; i += 1000) {
+      const chunk = rows.slice(i, i + 1000); const params = [];
+      const tuples = chunk.map((r) => `(${r.map((v) => { params.push(v); return `$${params.length}`; }).join(', ')})`);
+      await c.query(`INSERT INTO ${q(table)} (${cols.map(([n]) => q(n)).join(', ')}) VALUES ${tuples.join(', ')}`, params);
+    }
+    console.log(`${table}: ${rows.length}`);
+  }
+  for (const [table, cols, unique] of INDEXES) {
+    await c.query(`CREATE ${unique ? 'UNIQUE ' : ''}INDEX ON ${q(table)} (${cols.map((x) => x.replace(/^(\w+)/, '"$1"')).join(', ')})`);
+  }
+  if (target === 'pg') await c.query('VACUUM ANALYZE');
+  else for (const [table] of TABLES) await c.query(`ANALYZE ${q(table)}`);
+  await c.end();
 }
-const roles = Array.from({ length: N.roles }, (_, i) => [uuid(), `role_${i}`, `Role ${i}`, i * 10]);
-await insert('Roles', ['id', 'key', 'name', 'priority'], roles);
-const users = Array.from({ length: N.users }, (_, i) => [uuid(), `user${i}@example.com`, `user_${i}`, `First${i}`, `Last${i}`, rnd() < 0.2 ? uuid() : null, pick(['en', 'en', 'tr', 'de'])]);
-await insert('Users', ['id', 'email', 'username', 'firstName', 'lastName', 'organizationId', 'preferredLanguage'], users);
-const ur = [];
-for (const u of users) {
-  ur.push([uuid(), u[0], roles[0][0], true, null]);
-  if (rnd() < 0.13) ur.push([uuid(), u[0], pick(roles.slice(1))[0], rnd() < 0.7, rnd() < 0.3 ? ts() : null]);
-}
-await insert('UserRoles', ['id', 'userId', 'roleId', 'isActive', 'expiresAt'], ur);
-const items = Array.from({ length: N.items }, () => [uuid(), pick(['standard', 'premium', 'free']), rnd() < 0.8, rnd() < 0.9, rnd() < 0.3 ? null : Math.floor(rnd() * 1000), ts()]);
-await insert('Items', ['id', 'type', 'isPublic', 'isActive', 'displayOrder', 'createdAt'], items);
-const tr = [];
-for (const it of items) for (const lang of ['en', 'tr']) if (rnd() < 0.9) tr.push([uuid(), it[0], lang, `${lang} name ${it[0].slice(0, 8)}`]);
-await insert('ItemTranslations', ['id', 'itemId', 'language', 'name'], tr);
-const active = users.filter(() => rnd() < 0.6);
-const msgs = Array.from({ length: N.messages }, () => [uuid(), pick(active)[0], pick(['info', 'reward', 'system']), 'Hello there', rnd() < 0.5, ts()]);
-await insert('Messages', ['id', 'userId', 'type', 'title', 'isRead', 'createdAt'], msgs);
-const links = Array.from({ length: N.links }, () => [uuid(), pick(users)[0], pick(users)[0], rnd() < 0.6 ? 'accepted' : 'pending']);
-await insert('Links', ['id', 'userId', 'otherId', 'status'], links);
-await c.query(`
-  CREATE UNIQUE INDEX ON "UserRoles" ("userId", "roleId");
-  CREATE INDEX ON "UserRoles" ("roleId");
-  CREATE INDEX ON "Items" ("isActive");
-  CREATE INDEX ON "Items" ("isPublic");
-  CREATE UNIQUE INDEX ON "ItemTranslations" ("itemId", language);
-  CREATE INDEX ON "Messages" ("userId", "createdAt" DESC);
-  CREATE INDEX ON "Links" ("userId");
-  CREATE INDEX ON "Links" ("otherId");
-  CREATE INDEX ON "Links" (status);
-`);
-await c.query('VACUUM ANALYZE');
-console.log('done');
-await c.end();
+console.log(`seeded ${target} in ${((Date.now() - t0) / 1000).toFixed(1)} s`);

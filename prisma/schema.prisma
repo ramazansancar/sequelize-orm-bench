@@ -1,0 +1,86 @@
+// The 7 benchmark tables (created by seed.mjs; Prisma only reads them, no migrations).
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                String     @id @db.Uuid
+  email             String?
+  username          String?    @db.VarChar(255)
+  firstName         String?    @db.VarChar(255)
+  lastName          String?    @db.VarChar(255)
+  organizationId    String?    @db.Uuid
+  preferredLanguage String?    @db.VarChar(16)
+  userRoles         UserRole[]
+
+  @@map("Users")
+}
+
+model Role {
+  id        String     @id @db.Uuid
+  key       String?    @db.VarChar(255)
+  name      String?    @db.VarChar(255)
+  priority  Int?
+  userRoles UserRole[]
+
+  @@map("Roles")
+}
+
+model UserRole {
+  id        String    @id @db.Uuid
+  userId    String    @db.Uuid
+  roleId    String    @db.Uuid
+  isActive  Boolean?
+  expiresAt DateTime? @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id])
+  role      Role      @relation(fields: [roleId], references: [id])
+
+  @@map("UserRoles")
+}
+
+model Item {
+  id           String            @id @db.Uuid
+  type         String?           @db.VarChar(64)
+  isPublic     Boolean?
+  isActive     Boolean?
+  displayOrder Int?
+  createdAt    DateTime?         @db.Timestamptz(6)
+  translations ItemTranslation[]
+
+  @@map("Items")
+}
+
+model ItemTranslation {
+  id       String  @id @db.Uuid
+  itemId   String  @db.Uuid
+  language String? @db.VarChar(16)
+  name     String? @db.VarChar(255)
+  item     Item    @relation(fields: [itemId], references: [id])
+
+  @@map("ItemTranslations")
+}
+
+model Message {
+  id        String    @id @db.Uuid
+  userId    String    @db.Uuid
+  type      String?   @db.VarChar(64)
+  title     String?   @db.VarChar(255)
+  isRead    Boolean?
+  createdAt DateTime? @db.Timestamptz(6)
+
+  @@map("Messages")
+}
+
+model Link {
+  id      String  @id @db.Uuid
+  userId  String  @db.Uuid
+  otherId String  @db.Uuid
+  status  String? @db.VarChar(32)
+
+  @@map("Links")
+}

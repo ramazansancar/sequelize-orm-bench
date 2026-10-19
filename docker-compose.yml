@@ -1,3 +1,9 @@
+# PostgreSQL 17 for the benchmark. On its own (`docker compose up -d postgres`) it is the database for
+# a host run (localhost:5440, user/password/db: bench). The compose.*.yml files include it and add a
+# runner container, so a whole run needs only Docker. The data volume is shared by all of them, so
+# PostgreSQL is seeded once.
+name: sequelize-orm-bench
+
 services:
   postgres:
     image: postgres:17
@@ -13,3 +19,13 @@ services:
       -c shared_buffers=1536MB
       -c effective_cache_size=4GB
       -c work_mem=16MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

@@ -1,4 +1,7 @@
 node_modules/
 package-lock.json
 results/
+generated/
 *.tgz
+builds/*
+!builds/README.md

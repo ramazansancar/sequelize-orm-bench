@@ -1,0 +1,45 @@
+# DM8 (Dameng) vs PostgreSQL 17: plain driver, Sequelize, TypeORM and Knex on each database, with
+# pg and pg-native on the PostgreSQL side.
+#   docker compose -f compose.dm8.yml run --rm bench
+# Override with SIDES, ROUNDS, DURATION (seconds per side), CONC.
+# The DM8 image is a third-party build (Dameng publishes no official image on Docker Hub); check
+# it before you use it. DM8 here: page size 8 KB, case-sensitive identifiers, UTF-8.
+# Results: the table on stdout, raw JSON lines in ./results/.
+include:
+  - docker-compose.yml
+
+services:
+  dm8:
+    image: xuxuclassmate/dameng:20251203
+    environment:
+      SYSDBA_PWD: ${DM8_PASSWORD:-Bench2026dm8}
+      SYSAUDITOR_PWD: ${DM8_PASSWORD:-Bench2026dm8}
+      PAGE_SIZE: "8"
+      CASE_SENSITIVE: "1"
+      CHARSET: "1"
+      INSTANCE_NAME: dm8bench
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/5236'"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+
+  bench:
+    build:
+      context: .
+      dockerfile: dm8/Dockerfile
+    image: sequelize-orm-bench:dm8
+    depends_on:
+      postgres: { condition: service_healthy }
+      dm8: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      DM8_HOST: dm8
+      DM8_PASSWORD: ${DM8_PASSWORD:-Bench2026dm8}
+    volumes:
+      - ./results:/app/results
+    command: >
+      sh -c "node seed.mjs --if-needed && node dm8/seed.mjs --if-needed &&
+      node run.mjs '${SIDES:-pg@pg,pg-native@pg,dmdb@dm8,sequelize5@pg,sequelize5-native@pg,sequelize6@pg,sequelize6-native@pg,sequelize-dm8@dm8,typeorm@pg,typeorm-native@pg,typeorm-dm@dm8,knex@pg,knex-native@pg,knex-dm@dm8}' ${ROUNDS:-3} ${DURATION:-20} ${CONC:-12}"

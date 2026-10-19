@@ -1,0 +1,65 @@
+# The same queries and data on CockroachDB, YugabyteDB and ClickHouse (single node each, official
+# images), next to PostgreSQL 17. Seeds every database once (YugabyteDB and CockroachDB take a few
+# minutes), then runs the sides that support each one.
+#   docker compose -f compose.databases.yml run --rm bench
+# Override with SIDES, ROUNDS, DURATION (seconds per side), CONC, e.g.
+#   SIDES=pg@crdb,sequelize6@crdb ROUNDS=1 DURATION=10 docker compose -f compose.databases.yml run --rm bench
+# Needs ~16 GB for Docker with everything up. Results: the table on stdout, raw JSON lines in ./results/.
+include:
+  - docker-compose.yml
+
+services:
+  cockroach:
+    image: cockroachdb/cockroach:v26.2.8
+    # cache / SQL memory in line with PostgreSQL's shared_buffers
+    command: start-single-node --insecure --cache=1536MiB --max-sql-memory=1536MiB
+    healthcheck:
+      test: ["CMD", "cockroach", "sql", "--insecure", "-e", "SELECT 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  yugabyte:
+    image: yugabytedb/yugabyte:2026.1.2.0-b137
+    hostname: yugabyte
+    command: bin/yugabyted start --background=false --advertise_address=yugabyte
+    healthcheck:
+      test: ["CMD-SHELL", "bin/ysqlsh -h yugabyte -c 'SELECT 1' > /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.7.34
+    environment:
+      CLICKHOUSE_DB: bench
+      CLICKHOUSE_USER: bench
+      CLICKHOUSE_PASSWORD: bench
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "bench", "--password", "bench", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  bench:
+    build: .
+    image: sequelize-orm-bench:runner
+    depends_on:
+      postgres: { condition: service_healthy }
+      cockroach: { condition: service_healthy }
+      yugabyte: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      CRDB_HOST: cockroach
+      YB_HOST: yugabyte
+      CH_URL: http://clickhouse:8123
+    volumes:
+      - ./results:/app/results
+    command: >
+      sh -c "for t in pg crdb yb ch; do node seed.mjs --target $$t --if-needed || exit 1; done &&
+      node run.mjs '${SIDES:-pg@pg,sequelize6@pg,typeorm@pg,knex@pg,drizzle@pg,kysely@pg,pg@crdb,sequelize6@crdb,typeorm@crdb,knex@crdb,drizzle@crdb,kysely@crdb,pg@yb,sequelize6@yb,typeorm@yb,knex@yb,drizzle@yb,kysely@yb,clickhouse@ch,kysely@ch}' ${ROUNDS:-3} ${DURATION:-20} ${CONC:-12}"
