@@ -55,4 +55,5 @@ Put the stock `7.0.0-alpha.48` and the local build into two copies of this folde
 ## Notes
 
 - Use an otherwise idle machine. Background CPU (antivirus scans, browsers) shows up directly in the numbers.
+- On a Windows host (not in a container), `@sequelize/core` 7.0.0-alpha.48 is much slower: `isModelStatic` calls `require('../model')` on every call, and on Windows that goes to the file system each time. In a quick check it was ~400 q/s stock vs ~2,000 q/s with that one call cached. Run it in Linux or a container to compare libraries; on Windows the result mostly measures that call. (The fix is in [sequelize#18234](https://github.com/sequelize/sequelize/pull/18234).)
 - `pg` selects only the columns it needs to produce the same fingerprint, so it's a ceiling, not an ORM-equivalent query.
