@@ -1,0 +1,17 @@
+{
+  "name": "sequelize-orm-bench",
+  "private": true,
+  "type": "module",
+  "description": "Small read-path benchmark for Sequelize v6 / v7 vs plain pg (four queries, synthetic data).",
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "seed": "node seed.mjs",
+    "bench": "node run.mjs"
+  },
+  "dependencies": {
+    "pg": "8.23.1",
+    "sequelize6": "npm:sequelize@6.37.8",
+    "@sequelize/core": "7.0.0-alpha.48",
+    "@sequelize/postgres": "7.0.0-alpha.48"
+  }
+}
